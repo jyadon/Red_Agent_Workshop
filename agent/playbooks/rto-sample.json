@@ -1,0 +1,72 @@
+{
+  "name": "ad-rto-sample",
+  "description": "Sample RTO (Red Team Operations) playbook: verification-style checks corresponding to the findings in data/findings-sample.json. This is the tracked seed template; the live playbook (playbooks/rto.json, gitignored) is grown by exporting commands from successful retests. Variables: {{target}} {{domain}} {{user}} {{password}} {{dns}} plus extract-inherited (e.g. {{dcs}} {{dc}}). Conventions: (1) wrap {{password}}/{{user}} in '...' (the server escapes assuming injection inside '...'). (2) extract-inherited vars (e.g. {{dcs}}) are already individually shlex.quote'd, so use them as-is. (3) proxychains defaults to true; set false for local/ICMP/UDP. (4) attach judge:true + judge_criteria to check steps; leave prerequisite/collection steps unjudged.",
+  "version": 2,
+  "groups": [
+    {
+      "id": "recon",
+      "name": "Initial recon / DC discovery (prerequisite, not shown in report)",
+      "steps": [
+        {
+          "id": "prep-workdir",
+          "description": "Create the Kali-side output directory (local operation, so proxychains disabled)",
+          "command": "mkdir -p /tmp/rto",
+          "proxychains": false
+        },
+        {
+          "id": "dc-discovery",
+          "description": "Discover DCs via the DNS SRV record _ldap._tcp.<domain> against {{dns}}. The server machine-extracts the output and injects {{dcs}}/{{dc}} server-side (no extract needed).",
+          "command": "dig +tcp @{{dns}} _ldap._tcp.{{domain}} SRV +short"
+        }
+      ]
+    },
+    {
+      "id": "finding-1-spn-on-privileged-account",
+      "name": "Finding 1: SPN bound to a privileged account (Kerberoasting exposure)",
+      "when": { "var_present": "dcs" },
+      "steps": [
+        {
+          "id": "spn-on-privileged-accounts",
+          "label": "SPN on privileged account",
+          "description": "Check whether any high-privilege account (adminCount=1) still has a servicePrincipalName set.",
+          "command": "netexec ldap {{dc}} -u '{{user}}' -p '{{password}}' -d '{{domain}}' --query \"(&(objectClass=user)(adminCount=1)(servicePrincipalName=*))\" \"sAMAccountName servicePrincipalName\"",
+          "judge": true,
+          "judge_criteria": "Unresolved if any privileged account (adminCount=1) has an SPN; Resolved if none do.",
+          "remediation": "Remove SPNs from privileged accounts; use dedicated low-privilege accounts or a gMSA for services that require an SPN."
+        }
+      ]
+    },
+    {
+      "id": "finding-2-ntlmv1-enabled",
+      "name": "Finding 2: NTLMv1 authentication enabled (LmCompatibilityLevel)",
+      "when": { "var_present": "dcs" },
+      "steps": [
+        {
+          "id": "lmcompatibilitylevel-check",
+          "label": "NTLMv1 (LmCompatibilityLevel)",
+          "description": "Read LmCompatibilityLevel from the DC's remote registry (HKLM\\SYSTEM\\CurrentControlSet\\Control\\Lsa).",
+          "command": "impacket-reg '{{domain}}/{{user}}:{{password}}'@{{dc}} query -keyName 'HKLM\\SYSTEM\\CurrentControlSet\\Control\\Lsa' -v LmCompatibilityLevel",
+          "judge": true,
+          "judge_criteria": "Resolved if LmCompatibilityLevel is 3 or higher, or the value is absent (modern Windows defaults to NTLMv2-only, effectively level 3, so an absent value means the deliberate weak setting was removed). Unresolved only if it is explicitly 0, 1, or 2.",
+          "remediation": "Set LmCompatibilityLevel to 5 (send NTLMv2 response only / refuse LM and NTLM) on all domain controllers and clients."
+        }
+      ]
+    },
+    {
+      "id": "finding-3-ldap-signing",
+      "name": "Finding 3: LDAP signing / channel binding not enforced",
+      "when": { "var_present": "dcs" },
+      "steps": [
+        {
+          "id": "ldap-signing-check",
+          "label": "LDAP signing / channel binding",
+          "description": "Read the DC's LDAP host banner (a plain authenticated nxc ldap run prints signing / channel-binding status — no module needed; ldap-checker is deprecated).",
+          "command": "netexec ldap {{dc}} -u '{{user}}' -p '{{password}}' -d '{{domain}}'",
+          "judge": true,
+          "judge_criteria": "Read the host banner nxc ldap prints. Resolved if it shows LDAP signing Enforced/Required AND channel binding Required; Unresolved if it shows signing:None or channel binding not enforced (e.g. 'No TLS cert'). Wording varies by NetExec version.",
+          "remediation": "Set LDAP server signing to Require signing and enforce LDAP channel binding on all domain controllers; consider LDAPS."
+        }
+      ]
+    }
+  ]
+}

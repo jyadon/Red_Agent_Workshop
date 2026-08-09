@@ -1,0 +1,74 @@
+{
+  "report_metadata": {
+    "company_name": "Example Corp",
+    "generated_at": "2026-01-15T10:00:00+09:00",
+    "total_findings": 3
+  },
+  "findings": [
+    {
+      "section": 1,
+      "platform": [
+        "ad"
+      ],
+      "tool_hints": [
+        "impacket-GetUserSPNs (enumerate accounts that have an SPN; check whether high-privilege accounts appear)",
+        "nxc ldap (--query for servicePrincipalName on privileged accounts / group members)"
+      ],
+      "judgment_criteria": "If no servicePrincipalName is set on high-privilege accounts such as Administrators / Domain Admins, the issue is Resolved (SPNs have been migrated to dedicated low-privilege accounts). If SPNs remain on high-privilege accounts, it is Unresolved; if they remain on only some high-privilege accounts, it is Partially Resolved.",
+      "title": "An SPN is bound to a domain administrator account",
+      "risk_level": "High",
+      "summary": "An SPN (Service Principal Name) is bound to a domain administrator account, which was confirmed to be vulnerable to Kerberoasting attacks.\nAs a result, an attacker holding only standard domain-user privileges can steal the credentials of a domain administrator account.",
+      "description": "An SPN is an identifier registered for an account that provides a service in an Active Directory environment. The service ticket issued for an account that has an SPN set contains information derived from that account's password, and it can be requested by any account in the domain. An attacker analyzes this ticket offline to attempt to recover the original account's password (a Kerberoasting attack).\nIn this lab environment (lab.local), an SPN was confirmed to be bound to a high-privilege account, and a service ticket was successfully obtained. This is a vulnerable configuration deliberately set up for the exercise.",
+      "recommendation": "We recommend changing operations so that high-privilege accounts, including domain administrators, do not have SPNs set. If an SPN must be set, create a dedicated account, grant only the minimum necessary privileges, disable interactive logon, and set a complex password of at least 15 characters; where possible, use a gMSA (Group Managed Service Account).",
+      "references": [
+        {
+          "name": "Service Accounts (Microsoft Learn)",
+          "url": "https://learn.microsoft.com/en-us/windows-server/identity/ad-ds/manage/understand-service-accounts"
+        }
+      ]
+    },
+    {
+      "section": 2,
+      "platform": [
+        "ad"
+      ],
+      "tool_hints": [
+        "impacket-reg (remote registry query of HKLM\\SYSTEM\\CurrentControlSet\\Control\\Lsa LmCompatibilityLevel on each DC)",
+        "nxc smb (authenticated host enumeration to reach the DC's remote registry)"
+      ],
+      "judgment_criteria": "Resolved if LmCompatibilityLevel is 3 or higher on all domain controllers, OR the value is absent (modern Windows defaults to NTLMv2-only, effectively level 3), because an absent value means the deliberate weak setting was removed. Unresolved only if the value is explicitly 0, 1, or 2. Partially Resolved if only some DCs meet this bar. (Full refusal of NTLMv1/LM requires level 5, which is a hardening beyond this finding's remediation bar.)",
+      "title": "NTLMv1 authentication is enabled",
+      "risk_level": "High",
+      "summary": "NTLMv1 authentication was confirmed to be allowed in the domain environment.\nNTLMv1 has weak cryptographic strength and can be analyzed offline, so its use is deprecated.",
+      "description": "NTLMv1 is an authentication method that uses a challenge-response scheme based on a hash generated from the user's password. When it is allowed, an attacker may force NTLMv1 authentication to obtain the response and, through offline analysis, recover the password or hash.\nIn this lab environment (lab.local), the registry key LMCompatibilityLevel on domain controller dc01.lab.local was set to 2, confirming that NTLMv1 authentication is enabled (a vulnerable configuration deliberately set up for the exercise).",
+      "recommendation": "We recommend setting LMCompatibilityLevel to 5 (send NTLMv2 response only / refuse NTLM and LM) on all domain controllers and clients to disable NTLMv1/LM authentication. If applying it in stages, ultimately maintain a value of 3 or higher.",
+      "references": [
+        {
+          "name": "Network security: LAN Manager authentication level (Microsoft Learn)",
+          "url": "https://learn.microsoft.com/en-us/windows/security/threat-protection/security-policy-settings/network-security-lan-manager-authentication-level"
+        }
+      ]
+    },
+    {
+      "section": 3,
+      "platform": [
+        "ad"
+      ],
+      "tool_hints": [
+        "nxc ldap (base authenticated run; the host banner already reports (signing:...) and (channel binding:...) — no module needed, ldap-checker is deprecated)"
+      ],
+      "judgment_criteria": "Run nxc ldap <dc> -u ... -p ... -d ... and read the host banner it prints. Resolved if the banner shows LDAP signing Enforced/Required AND channel binding Required. Unresolved if it shows signing:None, or channel binding not enforced (e.g. 'No TLS cert'). Partially Resolved if only some DCs meet this bar. (Exact wording varies by NetExec version.)",
+      "title": "LDAP signing and channel binding are not enforced",
+      "risk_level": "Medium",
+      "summary": "Domain controllers that do not enforce LDAP signing and LDAP channel binding were confirmed to exist.\nBy exploiting this weakness, an attacker may relay NTLM authentication and perform LDAP operations via a man-in-the-middle attack, enabling lateral movement or privilege escalation.",
+      "description": "When a domain controller is configured not to require LDAP signing/channel binding, it can become a target for NTLM relay attacks.\nIn this lab environment (lab.local), domain controller dc01.lab.local was confirmed to be in a state of signing:None and channel binding:No TLS cert (a vulnerable configuration deliberately set up for the exercise). The targets in the lab are placed on the 10.10.10.0/24 segment.",
+      "recommendation": "We recommend setting LDAP server signing to Require signing on all domain controllers and enforcing LDAP channel binding. In addition, consider using LDAPS (LDAP over TLS) and reducing unnecessary NTLM authentication.",
+      "references": [
+        {
+          "name": "2020 LDAP channel binding and LDAP signing requirements (Microsoft)",
+          "url": "https://support.microsoft.com/en-us/topic/2020-ldap-channel-binding-and-ldap-signing-requirements-for-windows-kb4520412-ef185fb8-00f7-167d-744c-f299a66fc00a"
+        }
+      ]
+    }
+  ]
+}
